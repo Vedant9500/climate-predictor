@@ -1,58 +1,37 @@
-import requests
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import load_model
-from datetime import datetime, timedelta
+from sklearn.preprocessing import MinMaxScaler
 
-# Function to fetch current weather data
-def fetch_current_weather(location):
-    api_key = '50324bb67be34dd28a2151821252001'  # Replace with your actual API key
-    url = f'http://api.weatherapi.com/v1/current.json?key={api_key}&q={location}'
-    response = requests.get(url)
-    data = response.json()
-    return data['current']['temp_c']
+# Load your trained model (assuming it's saved as 'weather_model.h5')
+model = load_model('weather_model.h5')
 
-# Function to preprocess the fetched data
-def preprocess_data(temp, scaler):
-    temp_df = pd.DataFrame({'tavg': [temp]})
-    scaled_temp = scaler.transform(temp_df)
-    return scaled_temp[0]
+# Load the last 24 hours of data for Pune
+data = pd.read_csv('Pune_weather_data.csv')
 
-# Load model metadata
-model_metadata = np.load('/workspaces/climate-predictor/model_metadata.npy', allow_pickle=True).item()
+# Convert 'time' to datetime
+data['time'] = pd.to_datetime(data['time'])
 
-# Load the scaler parameters
+# Preprocess the data for prediction (use the last 24 hours of data)
+last_24_hours = data.tail(24)
+
+# Extract relevant features (time, temperature, precipitation, wind speed)
+features = last_24_hours[['temperature_2m', 'precipitation', 'wind_speed_10m']].values
+
+# Normalize the features using the same scaler that was used during training
 scaler = MinMaxScaler(feature_range=(0, 1))
-scaler.min_ = np.array([model_metadata['scaler_params']['min']])
-scaler.scale_ = np.array([1 / (model_metadata['scaler_params']['max'] - model_metadata['scaler_params']['min'])])
+features_scaled = scaler.fit_transform(features)
 
-# Correctly set the scaler's scale_ attribute
-scaler.scale_ = np.array([1 / (model_metadata['scaler_params']['max'] - model_metadata['scaler_params']['min'])])
-scaler.data_min_ = np.array([model_metadata['scaler_params']['min']])
-scaler.data_max_ = np.array([model_metadata['scaler_params']['max']])
-
-# Fetch current weather data
-location = 'Mumbai'  # Replace with the desired location
-current_temp = fetch_current_weather(location)
-
-# Preprocess the fetched data
-scaled_temp = preprocess_data(current_temp, scaler)
-
-# Prepare the data for LSTM
-time_step = 24
-X_input = np.array([scaled_temp for _ in range(time_step)]).reshape(1, time_step, 1)
-
-# Load the trained model
-model = load_model('/workspaces/climate-predictor/weather_forecast_model_24h.h5')
+# Prepare the input data for the model (reshape to 3D for LSTM)
+X_input = np.reshape(features_scaled, (1, 24, 3))  # 1 sample, 24 timesteps, 3 features
 
 # Predict the next 24 hours
 predictions = model.predict(X_input)
-predictions = scaler.inverse_transform(predictions)
 
-# Print the predictions with timestamps
-current_time = datetime.now()
-print(f'Predicted temperatures for the next 24 hours in {location}:')
-for i, temp in enumerate(predictions.flatten()):
-    time = (current_time + timedelta(hours=i)).strftime('%I %p')
-    print(f'{time}: {temp:.2f}°C')
+# Rescale the predictions back to original values (if necessary)
+predictions_rescaled = scaler.inverse_transform(predictions[0])
+
+# Print the predicted weather for the next 24 hours
+print("Predicted Weather for the Next 24 Hours:")
+for i, pred in enumerate(predictions_rescaled):
+    print(f"Hour {i + 1}: Temperature: {pred[0]:.2f}°C, Precipitation: {pred[1]:.2f}mm, Wind Speed: {pred[2]:.2f} m/s")

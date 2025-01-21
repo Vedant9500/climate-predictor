@@ -1,115 +1,136 @@
-from meteostat import Point, Daily
 import pandas as pd
 from datetime import datetime
-from sklearn.preprocessing import MinMaxScaler
+from meteostat import Stations, Hourly
+from concurrent.futures import ThreadPoolExecutor
+import time
 
-# Unit conversion functions
-def convert_wind_to_kmph(wind_speed_ms):
-    return wind_speed_ms * 3.6  # Convert m/s to km/h
-
-def convert_pressure_to_hpa(pressure):
-    return pressure / 100  # Convert Pa to hPa
-
-# Define major locations in Maharashtra with (latitude, longitude, elevation)
-locations = {
-    "Mumbai": Point(19.0760, 72.8777, 14),
-    "Pune": Point(18.5204, 73.8567, 560),
-    "Nagpur": Point(21.1458, 79.0882, 310),
-    "Nashik": Point(19.9975, 73.7898, 700),
-    "Aurangabad": Point(19.8762, 75.3433, 568),
-    "Kolhapur": Point(16.7050, 74.2433, 570),
-    "Solapur": Point(17.6599, 75.9064, 457),
+# Define cities and their coordinates
+CITIES = {
+    "Mumbai": {"lat": 19.0760, "lon": 72.8777},
+    "Pune": {"lat": 18.5204, "lon": 73.8567},
+    "Nagpur": {"lat": 21.1458, "lon": 79.0882},
+    "Hyderabad": {"lat": 17.3850, "lon": 78.4867},
+    "Chennai": {"lat": 13.0827, "lon": 80.2707},
+    "Bengaluru": {"lat": 12.9716, "lon": 77.5946},
+    "Kolkata": {"lat": 22.5726, "lon": 88.3639},
+    "New Delhi": {"lat": 28.6139, "lon": 77.2090},
+    "Ahmedabad": {"lat": 23.0225, "lon": 72.5714},
+    "Surat": {"lat": 21.1702, "lon": 72.8311},
+    "Jaipur": {"lat": 26.9124, "lon": 75.7873},
+    "Lucknow": {"lat": 26.8467, "lon": 80.9462},
+    "Kanpur": {"lat": 26.4499, "lon": 80.3319},
+    "Visakhapatnam": {"lat": 17.6868, "lon": 83.2185},
+    "Thiruvananthapuram": {"lat": 8.5241, "lon": 76.9366},
+    "Patna": {"lat": 25.5941, "lon": 85.1376},
+    "Bhopal": {"lat": 23.2599, "lon": 77.4126},
+    "Ranchi": {"lat": 23.3441, "lon": 85.3096},
+    "Agra": {"lat": 27.1767, "lon": 78.0081},
+    "Indore": {"lat": 22.7196, "lon": 75.8577},
+    "Raipur": {"lat": 21.2514, "lon": 81.6296},
+    "Guwahati": {"lat": 26.1445, "lon": 91.7362},
+    "Kochi": {"lat": 9.9312, "lon": 76.2673},
+    "Varanasi": {"lat": 25.3176, "lon": 82.9739},
+    "Jodhpur": {"lat": 26.2389, "lon": 73.0243},
+    "Amritsar": {"lat": 31.6340, "lon": 74.8723},
+    "Ludhiana": {"lat": 30.9010, "lon": 75.8573},
+    "Nashik": {"lat": 19.9975, "lon": 73.7898},
+    "Vadodara": {"lat": 22.3072, "lon": 73.1812},
+    "Coimbatore": {"lat": 11.0168, "lon": 76.9558},
+    "Madurai": {"lat": 9.9252, "lon": 78.1198},
+    "Hubballi-Dharwad": {"lat": 15.3647, "lon": 75.1239},
+    "Mysore": {"lat": 12.2958, "lon": 76.6394},
+    "Tiruchirappalli": {"lat": 10.7905, "lon": 78.7047},
+    "Salem": {"lat": 11.6643, "lon": 78.1460},
+    "Thane": {"lat": 19.2183, "lon": 72.9781},
+    "Jabalpur": {"lat": 23.1815, "lon": 79.9864},
+    "Gwalior": {"lat": 26.2183, "lon": 78.1828},
+    "Bhubaneswar": {"lat": 20.2961, "lon": 85.8245},
+    "Vijayawada": {"lat": 16.5062, "lon": 80.6480},
+    "Amravati": {"lat": 20.9374, "lon": 77.7796},
 }
 
-# Define date range
-start = datetime(2014, 1, 1)
-end = datetime(2024, 1, 1)
+# Define time period
+START_DATE = datetime(2004, 1, 1)
+END_DATE = datetime(2024, 1, 1)
 
-# Fetch data for all locations
-dataframes = []
+def get_nearest_station(lat, lon):
+    """Find nearest weather station."""
+    stations = Stations()
+    stations = stations.nearby(lat, lon)
+    station = stations.fetch(1)
+    return station.index[0] if not station.empty else None
 
-for city, point in locations.items():
+def fetch_data(city, lat, lon):
+    """Fetch weather data for a city."""
     print(f"Fetching data for {city}...")
-    # Fetch daily weather data
-    data = Daily(point, start, end)
-    df = data.fetch()
     
-    # Convert units
-    df['wspd'] = df['wspd'].apply(convert_wind_to_kmph)  # Convert wind speed to km/h
-    df['wpgt'] = df['wpgt'].apply(convert_wind_to_kmph)  # Convert wind gusts to km/h
-    df['pres'] = df['pres'].apply(convert_pressure_to_hpa)  # Convert pressure to hPa
+    # Get nearest station
+    station_id = get_nearest_station(lat, lon)
+    if not station_id:
+        print(f"No weather station found near {city}")
+        return None
     
-    # Add metadata for units
-    df['units'] = {
-        'tavg': '°C',
-        'tmin': '°C',
-        'tmax': '°C',
-        'prcp': 'mm',
-        'snow': 'cm',
-        'wspd': 'km/h',
-        'wpgt': 'km/h',
-        'pres': 'hPa',
-        'tsun': 'hours'
-    }
+    try:
+        # Get hourly data
+        data = Hourly(station_id, START_DATE, END_DATE)
+        df = data.fetch()
+
+        if df.empty:
+            print(f"No data found for {city}")
+            return None
+
+        # Clean and process data
+        df = df.reset_index()
+        
+        # Rename columns to match the required format
+        df = df.rename(columns={
+            'time': 'time',
+            'temp': 'temperature_2m',  # Already in Celsius
+            'prcp': 'precipitation',    # Already in mm
+            'wspd': 'wind_speed_10m'    # Convert from km/h to m/s
+        })
+        
+        # Convert wind speed from km/h to m/s
+        df['wind_speed_10m'] = df['wind_speed_10m'] * 0.277778
+        
+        # Keep only needed columns
+        needed_columns = ['time', 'temperature_2m', 'precipitation', 'wind_speed_10m']
+        df = df[needed_columns]
+        
+        # Remove missing values
+        df = df.dropna()
+        
+        # Add city column
+        df['city'] = city
+        
+        return df
     
-    # Add a column for the city name
-    df['City'] = city
-    # Append to the list
-    dataframes.append(df)
+    except Exception as e:
+        print(f"Error processing data for {city}: {e}")
+        return None
 
-# Combine all data into a single DataFrame
-maharashtra_data = pd.concat(dataframes)
+def fetch_all_cities():
+    """Fetch weather data for all cities."""
+    all_data = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        for city, coords in CITIES.items():
+            futures.append(executor.submit(fetch_data, city, coords["lat"], coords["lon"]))
+        for future in futures:
+            try:
+                result = future.result()
+                if result is not None:
+                    all_data.append(result)
+            except Exception as e:
+                print(f"Error in thread execution: {e}")
 
-# Reset index and sort by date for clarity
-maharashtra_data.reset_index(inplace=True)
-maharashtra_data.sort_values(by=['time', 'City'], inplace=True)
+    # Combine all data into a single DataFrame
+    if all_data:
+        final_df = pd.concat(all_data, ignore_index=True)
+        final_df.to_csv("all_cities_weather_data.csv", index=False)
+        print("All cities data saved to all_cities_weather_data.csv")
+    else:
+        print("No data fetched for any city.")
 
-# Save the units metadata separately
-units_metadata = {
-    'tavg': '°C',
-    'tmin': '°C',
-    'tmax': '°C',
-    'prcp': 'mm',
-    'snow': 'cm',
-    'wspd': 'km/h',
-    'wpgt': 'km/h',
-    'pres': 'hPa',
-    'tsun': 'hours'
-}
-
-# Save units metadata
-pd.Series(units_metadata).to_csv('maharashtra_weather_units.csv')
-
-# Display the first few rows of the raw data
-print(maharashtra_data.head())
-
-# Save raw data to a CSV file (optional)
-maharashtra_data.to_csv("maharashtra_weather_raw.csv", index=False)
-
-# --- Preprocessing ---
-
-# Handle missing values
-maharashtra_data.fillna(method='ffill', inplace=True)  # Forward fill
-maharashtra_data.fillna(method='bfill', inplace=True)  # Backward fill
-
-# Normalize numerical columns (e.g., temperature, precipitation)
-scaler = MinMaxScaler()
-
-# Select numerical columns for normalization
-numerical_columns = ['tavg', 'tmin', 'tmax', 'prcp', 'snow', 'wspd', 'wpgt', 'pres', 'tsun']
-maharashtra_data[numerical_columns] = scaler.fit_transform(maharashtra_data[numerical_columns])
-
-# Save preprocessed data to a new CSV file
-maharashtra_data.to_csv("maharashtra_weather_preprocessed.csv", index=False)
-
-# Save scaler parameters for each column
-scaler_params = pd.DataFrame({
-    'column': numerical_columns,
-    'min': [maharashtra_data[col].min() for col in numerical_columns],
-    'max': [maharashtra_data[col].max() for col in numerical_columns]
-})
-scaler_params.set_index('column', inplace=True)
-scaler_params.to_csv('maharashtra_weather_scaler_params.csv')
-
-# Display the first few rows of the preprocessed data
-print(maharashtra_data.head())
+if __name__ == "__main__":
+    fetch_all_cities()
