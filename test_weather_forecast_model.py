@@ -2,9 +2,10 @@ import numpy as np
 import pandas as pd
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
+from io import StringIO
 
-# Your test data (manual entry)
-data = """
+# Input test data
+RAW_DATA = """
 2023-12-30 00:00:00,12.8,0.0,0.0
 2023-12-30 01:00:00,15.8,0.0,1.6944458
 2023-12-30 02:00:00,15.9,0.0,1.5000012000000003
@@ -31,33 +32,49 @@ data = """
 2023-12-30 23:00:00,18.0,0.0,2.3055574000000005
 """
 
-# Create a DataFrame from the data
-from io import StringIO
-df = pd.read_csv(StringIO(data), header=None, names=['time', 'temperature_2m', 'precipitation', 'wind_speed_10m'])
+# Load the test data into a DataFrame
+def load_test_data(raw_data):
+    df = pd.read_csv(StringIO(raw_data), header=None, names=['time', 'temperature_2m', 'precipitation', 'wind_speed_10m'])
+    df['time'] = pd.to_datetime(df['time'])
+    return df
 
-# Convert 'time' to datetime format
-df['time'] = pd.to_datetime(df['time'])
+def preprocess_test_data(df, scaler):
+    # Select the last 24 hours for prediction
+    last_24_hours = df[['temperature_2m', 'precipitation', 'wind_speed_10m']].values
+    # Scale the data using the scaler from training
+    scaled_data = scaler.transform(last_24_hours)
+    # Reshape for model input
+    X_input = np.reshape(scaled_data, (1, 24, 3))
+    return X_input
 
-# Preprocess the data for prediction (using the last 24 hours)
-last_24_hours = df[['temperature_2m', 'precipitation', 'wind_speed_10m']].values
+def predict_weather(model, X_input, scaler):
+    # Generate predictions
+    predictions = model.predict(X_input)
+    # Rescale predictions back to original values
+    predictions_rescaled = scaler.inverse_transform(predictions[0])
+    return predictions_rescaled
 
-# Normalize the features using MinMaxScaler (fit using the data used during training)
-scaler = MinMaxScaler(feature_range=(0, 1))
-scaled_data = scaler.fit_transform(last_24_hours)
+def display_predictions(predictions):
+    print("Predicted Weather for the Next 24 Hours:")
+    for i, pred in enumerate(predictions):
+        print(f"Hour {i + 1}: Temperature: {pred[0]:.2f}°C, Precipitation: {pred[1]:.2f}mm, Wind Speed: {pred[2]:.2f} m/s")
 
-# Reshape data for model input (assuming model expects 3D input with shape (samples, timesteps, features))
-X_input = np.reshape(scaled_data, (1, 24, 3))  # 1 sample, 24 timesteps, 3 features
+if __name__ == "__main__":
+    # Load and preprocess test data
+    test_df = load_test_data(RAW_DATA)
 
-# Load your trained model
-model = load_model('unified_weather_lstm_model.h5')
+    # Load the trained model
+    model = load_model('unified_weather_lstm_model_tpu.h5')
 
-# Predict the next 24 hours
-predictions = model.predict(X_input)
+    # Define the MinMaxScaler (Ensure feature range matches training)
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaler.fit(test_df[['temperature_2m', 'precipitation', 'wind_speed_10m']])
 
-# Rescale the predictions back to original values (if necessary)
-predictions_rescaled = scaler.inverse_transform(predictions[0])
+    # Preprocess the test data for prediction
+    X_input = preprocess_test_data(test_df, scaler)
 
-# Print the predicted weather for the next 24 hours
-print("Predicted Weather for the Next 24 Hours:")
-for i, pred in enumerate(predictions_rescaled):
-    print(f"Hour {i + 1}: Temperature: {pred[0]:.2f}°C, Precipitation: {pred[1]:.2f}mm, Wind Speed: {pred[2]:.2f} m/s")
+    # Predict the next 24 hours of weather
+    predictions = predict_weather(model, X_input, scaler)
+
+    # Display the predictions
+    display_predictions(predictions)
