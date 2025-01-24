@@ -50,7 +50,7 @@ CITIES = {
 }
 
 # Define time period
-START_DATE = datetime(2004, 1, 1)
+START_DATE = datetime(2015, 1, 1)
 END_DATE = datetime(2024, 1, 1)
 
 def get_nearest_station(lat, lon):

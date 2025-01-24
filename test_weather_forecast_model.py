@@ -3,6 +3,24 @@ import pandas as pd
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
 from io import StringIO
+from datetime import datetime
+from meteostat import Point, Hourly
+
+# Define location for Pune
+pune = Point(18.5204, 73.8567, 560)
+
+# Define time period for the last 20 years
+start = datetime(2004, 1, 1)
+end = datetime(2024, 1, 1)
+
+# Fetch hourly data
+data = Hourly(pune, start, end)
+data = data.fetch()
+
+# Print the data
+print(data)
+# Save the data to a CSV file
+data.to_csv('/workspaces/climate-predictor/pune_hourly_data.csv')
 
 # Input test data
 RAW_DATA = """
