@@ -61,14 +61,10 @@ HOURLY_VARIABLES = [
     "cloud_cover_mid",
     "cloud_cover_high",
     
-    # Soil (surface)
-    "soil_temperature_0cm",
-    "soil_moisture_0_to_1cm",
-    
-    # Visibility & Weather Code
-    "visibility",
+    # Weather Code
     "weather_code",
 ]
+
 
 # =============================================================================
 # Data Configuration

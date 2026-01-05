@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files (large, should be re-fetched)
+data/raw/*.parquet
+data/raw/*.csv
+data/processed/
+
+# Model checkpoints (large)
+saved_models/
+*.pt
+*.pth
+*.h5
+*.onnx
+
+# Logs
+logs/
+*.log
+runs/
+
+# Plots
+plots/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.env
+.env.*
