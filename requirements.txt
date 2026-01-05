@@ -1,0 +1,12 @@
+# Climate Predictor Dependencies
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+torch>=2.0.0
+requests>=2.31.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tensorboard>=2.14.0
+pyarrow>=14.0.0
+tqdm>=4.66.0
+python-dateutil>=2.8.0
