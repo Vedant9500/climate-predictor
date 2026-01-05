@@ -127,6 +127,7 @@ class WeatherLSTM(nn.Module):
     def _clamp_outputs(self, predictions: torch.Tensor) -> torch.Tensor:
         """
         V1.1: Clamp outputs to valid physical ranges.
+        Only applied during inference (not training) to avoid gradient issues.
         
         Args:
             predictions: (batch, output_size) - flattened predictions
@@ -136,18 +137,26 @@ class WeatherLSTM(nn.Module):
         n_targets = len(self.OUTPUT_CLAMPS)
         n_horizons = predictions.size(-1) // n_targets
         
-        # Reshape to (batch, horizons, targets)
-        reshaped = predictions.view(-1, n_horizons, n_targets)
+        # Clone to avoid in-place modification
+        result = predictions.clone()
         
-        # Clamp each target variable
-        for target_idx, (min_val, max_val) in self.OUTPUT_CLAMPS.items():
-            if target_idx < n_targets:
-                reshaped[:, :, target_idx] = torch.clamp(
-                    reshaped[:, :, target_idx], min=min_val, max=max_val
-                )
+        # Reshape to (batch, horizons, targets)
+        reshaped = result.view(-1, n_horizons, n_targets)
+        
+        # Build list of clamped tensors (out-of-place)
+        clamped_targets = []
+        for target_idx in range(n_targets):
+            if target_idx in self.OUTPUT_CLAMPS:
+                min_val, max_val = self.OUTPUT_CLAMPS[target_idx]
+                clamped_targets.append(torch.clamp(reshaped[:, :, target_idx], min=min_val, max=max_val))
+            else:
+                clamped_targets.append(reshaped[:, :, target_idx])
+        
+        # Stack back together
+        clamped = torch.stack(clamped_targets, dim=-1)
         
         # Reshape back
-        return reshaped.view(-1, predictions.size(-1))
+        return clamped.view(-1, predictions.size(-1))
         
     def forward(
         self,
@@ -195,8 +204,8 @@ class WeatherLSTM(nn.Module):
         out = self.dropout(out)
         predictions = self.fc2(out)
         
-        # V1.1: Clamp outputs to valid physical ranges
-        if clamp_output:
+        # V1.1: Clamp outputs to valid physical ranges (only during inference)
+        if clamp_output and not self.training:
             predictions = self._clamp_outputs(predictions)
         
         if return_attention:
