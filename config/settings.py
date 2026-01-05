@@ -75,7 +75,8 @@ DATA_DIR = "data/raw"
 PROCESSED_DATA_DIR = "data/processed"
 
 # Sequence length for LSTM (hours of history to use)
-SEQUENCE_LENGTH = 72  # 3 days of hourly data
+# V1.1: Reduced from 72h to 48h to reduce overfitting
+SEQUENCE_LENGTH = 48  # 2 days of hourly data
 
 # Prediction horizons (hours ahead to predict)
 PREDICTION_HORIZONS = [1, 3, 6, 12, 24]
@@ -110,7 +111,7 @@ class TrainingConfig:
     batch_size: int = 64
     epochs: int = 50
     learning_rate: float = 0.001
-    weight_decay: float = 1e-5
+    weight_decay: float = 1e-4  # V1.1: Increased from 1e-5
     patience: int = 10  # Early stopping patience
     grad_clip: float = 1.0
     train_split: float = 0.7

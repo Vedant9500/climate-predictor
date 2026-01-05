@@ -50,7 +50,18 @@ class Attention(nn.Module):
 class WeatherLSTM(nn.Module):
     """
     LSTM model for multi-horizon weather prediction.
+    V1.1: Added layer normalization and output clamping.
     """
+    
+    # Output clamping ranges for each target variable (in order)
+    # temperature, humidity, precipitation, wind, cloud_cover
+    OUTPUT_CLAMPS = {
+        0: (-50.0, 60.0),   # temperature_2m: -50 to 60°C
+        1: (0.0, 100.0),    # relative_humidity_2m: 0-100%
+        2: (0.0, 500.0),    # precipitation: 0-500mm (realistic max)
+        3: (0.0, 200.0),    # wind_speed_10m: 0-200 km/h
+        4: (0.0, 100.0),    # cloud_cover: 0-100%
+    }
     
     def __init__(self, config: ModelConfig = ModelConfig()):
         """
@@ -78,6 +89,9 @@ class WeatherLSTM(nn.Module):
             bidirectional=config.bidirectional,
             batch_first=True,
         )
+        
+        # V1.1: Layer normalization (better than batch norm for RNNs)
+        self.layer_norm = nn.LayerNorm(self.effective_hidden)
         
         # Attention layer (optional)
         self.use_attention = config.use_attention
@@ -109,11 +123,37 @@ class WeatherLSTM(nn.Module):
         nn.init.zeros_(self.fc1.bias)
         nn.init.xavier_uniform_(self.fc2.weight)
         nn.init.zeros_(self.fc2.bias)
+    
+    def _clamp_outputs(self, predictions: torch.Tensor) -> torch.Tensor:
+        """
+        V1.1: Clamp outputs to valid physical ranges.
+        
+        Args:
+            predictions: (batch, output_size) - flattened predictions
+                         Structure: [h1_t1, h1_t2, ..., h1_t5, h2_t1, ..., h5_t5]
+                         where h=horizon, t=target
+        """
+        n_targets = len(self.OUTPUT_CLAMPS)
+        n_horizons = predictions.size(-1) // n_targets
+        
+        # Reshape to (batch, horizons, targets)
+        reshaped = predictions.view(-1, n_horizons, n_targets)
+        
+        # Clamp each target variable
+        for target_idx, (min_val, max_val) in self.OUTPUT_CLAMPS.items():
+            if target_idx < n_targets:
+                reshaped[:, :, target_idx] = torch.clamp(
+                    reshaped[:, :, target_idx], min=min_val, max=max_val
+                )
+        
+        # Reshape back
+        return reshaped.view(-1, predictions.size(-1))
         
     def forward(
         self,
         x: torch.Tensor,
         return_attention: bool = False,
+        clamp_output: bool = True,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Forward pass.
@@ -121,6 +161,7 @@ class WeatherLSTM(nn.Module):
         Args:
             x: Input tensor (batch, seq_len, input_size)
             return_attention: Whether to return attention weights
+            clamp_output: Whether to clamp outputs to valid ranges (V1.1)
             
         Returns:
             Predictions (batch, output_size)
@@ -133,6 +174,9 @@ class WeatherLSTM(nn.Module):
         
         # LSTM forward
         lstm_out, (h_n, c_n) = self.lstm(x)
+        
+        # V1.1: Apply layer normalization
+        lstm_out = self.layer_norm(lstm_out)
         
         # Get context vector
         if self.use_attention:
@@ -150,6 +194,10 @@ class WeatherLSTM(nn.Module):
         out = torch.relu(self.fc1(out))
         out = self.dropout(out)
         predictions = self.fc2(out)
+        
+        # V1.1: Clamp outputs to valid physical ranges
+        if clamp_output:
+            predictions = self._clamp_outputs(predictions)
         
         if return_attention:
             return predictions, attn_weights
