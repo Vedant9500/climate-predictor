@@ -74,13 +74,15 @@ class WeatherPredictor:
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_path}")
         
-        checkpoint = torch.load(model_path, map_location=self.device)
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         
         # Get model config from checkpoint or use default
-        config = ModelConfig()
-        if 'config' in checkpoint:
-            # Update config if stored
-            pass
+        if 'model_config' in checkpoint:
+            config = checkpoint['model_config']
+            logger.info(f"Loaded model config: hidden={config.hidden_size}, layers={config.num_layers}")
+        else:
+            logger.warning("No model_config in checkpoint, using default")
+            config = ModelConfig()
         
         model = WeatherLSTM(config)
         model.load_state_dict(checkpoint['model_state_dict'])

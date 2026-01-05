@@ -189,6 +189,7 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'val_loss': val_loss,
             'config': self.config,
+            'model_config': self.model.config,  # Save model architecture config
         }
         
         # Save latest
