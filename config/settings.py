@@ -75,8 +75,8 @@ DATA_DIR = "data/raw"
 PROCESSED_DATA_DIR = "data/processed"
 
 # Sequence length for LSTM (hours of history to use)
-# V1.1: Reduced from 72h to 48h to reduce overfitting
-SEQUENCE_LENGTH = 48  # 2 days of hourly data
+# V2.0: Back to 72h - CNN handles longer sequences better
+SEQUENCE_LENGTH = 72  # 3 days of hourly data
 
 # Prediction horizons (hours ahead to predict)
 PREDICTION_HORIZONS = [1, 3, 6, 12, 24]

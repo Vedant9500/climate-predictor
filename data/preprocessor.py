@@ -119,7 +119,7 @@ class DataPreprocessor:
     def add_lag_features(
         self,
         df: pd.DataFrame,
-        lag_hours: List[int] = [1, 6, 12],  # V1.1: Reduced from [1,3,6,12,24]
+        lag_hours: List[int] = [1, 3, 6, 12, 24],  # V2.0: restored
     ) -> pd.DataFrame:
         """
         Add lag features for key variables.
@@ -149,7 +149,7 @@ class DataPreprocessor:
     def add_rolling_features(
         self,
         df: pd.DataFrame,
-        windows: List[int] = [6, 24],  # V1.1: Reduced from [6,12,24]
+        windows: List[int] = [6, 12, 24],  # V2.0: restored
     ) -> pd.DataFrame:
         """
         Add rolling statistics.
