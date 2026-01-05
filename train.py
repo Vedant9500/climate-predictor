@@ -171,12 +171,22 @@ def main():
     # Load best model
     trainer.load_best_model()
     
-    # Get test predictions
+    # Get test predictions in batches to avoid OOM
     import torch
+    from torch.utils.data import DataLoader, TensorDataset
+    
     model.eval()
+    test_dataset = TensorDataset(torch.FloatTensor(X_test))
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    
+    all_predictions = []
     with torch.no_grad():
-        X_test_tensor = torch.FloatTensor(X_test).to(trainer.device)
-        test_predictions = model(X_test_tensor).cpu().numpy()
+        for (batch_x,) in test_loader:
+            batch_x = batch_x.to(trainer.device)
+            preds = model(batch_x).cpu().numpy()
+            all_predictions.append(preds)
+    
+    test_predictions = np.concatenate(all_predictions, axis=0)
     
     # Evaluate
     evaluator = Evaluator()
