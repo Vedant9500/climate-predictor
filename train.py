@@ -70,6 +70,8 @@ def main():
                        help='Early stopping patience')
     parser.add_argument('--weight-decay', type=float, default=0.01,
                        help='Weight decay (L2 regularization)')
+    parser.add_argument('--input-noise', type=float, default=0.01,
+                       help='Input noise level for data augmentation')
     
     # Other
     parser.add_argument('--device', type=str, default=None,
@@ -197,7 +199,7 @@ def main():
         
         # Use standard sequence creation (allows autoregression on targets)
         # We rely on dropout, noise, and weight decay to prevent overfitting
-        X_train, y_train = preprocessor.create_sequences(df_train_norm, stride=3, noise_level=0.01)
+        X_train, y_train = preprocessor.create_sequences(df_train_norm, stride=3, noise_level=args.input_noise)
         X_val, y_val = preprocessor.create_sequences(df_val_norm, stride=3, noise_level=0.0)
         X_test, y_test = preprocessor.create_sequences(df_test_norm, stride=3, noise_level=0.0)
         

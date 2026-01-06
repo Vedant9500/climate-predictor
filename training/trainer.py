@@ -83,12 +83,11 @@ class Trainer:
             weight_decay=config.weight_decay,
         )
         
-        # Learning rate scheduler (Cosine Annealing)
-        # T_0=10 epochs, T_mult=2 (restarts at 10, 30, 70...)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        # Learning rate scheduler (Cosine Annealing - Smooth Decay)
+        # Decays from initial LR to eta_min over total epochs (no restarts)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_0=10,
-            T_mult=2,
+            T_max=config.epochs,
             eta_min=1e-6,
         )
         
