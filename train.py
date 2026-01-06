@@ -44,13 +44,15 @@ def main():
                        help='End year for training data')
     parser.add_argument('--skip-fetch', action='store_true',
                        help='Skip data fetching (use cached data)')
+    parser.add_argument('--multi-location', action='store_true',
+                       help='Train on all TRAINING_LOCATIONS instead of single location')
     
     # Model arguments
-    parser.add_argument('--hidden-size', type=int, default=128,
+    parser.add_argument('--hidden-size', type=int, default=32,  # Reduced for less overfitting
                        help='LSTM hidden size')
-    parser.add_argument('--num-layers', type=int, default=2,
+    parser.add_argument('--num-layers', type=int, default=1,  # Reduced from 2
                        help='Number of LSTM layers')
-    parser.add_argument('--dropout', type=float, default=0.2,
+    parser.add_argument('--dropout', type=float, default=0.3,  # Balanced
                        help='Dropout rate')
     parser.add_argument('--no-attention', action='store_true',
                        help='Disable attention mechanism')
@@ -72,58 +74,143 @@ def main():
     args = parser.parse_args()
     
     # =========================================================================
-    # Step 1: Fetch Data
+    # Step 1: Fetch Data (Multi-Location)
     # =========================================================================
     logger.info("="*60)
-    logger.info("STEP 1: Fetching Data")
+    logger.info("STEP 1: Fetching Multi-Location Data")
     logger.info("="*60)
     
-    fetcher = WeatherDataFetcher(location=args.location)
+    from config.settings import TRAINING_LOCATIONS, LOCATIONS
+    import pandas as pd
+    from pathlib import Path
+    import numpy as np
     
-    if args.skip_fetch:
-        logger.info("Skipping fetch, loading cached data...")
-        # Load from parquet files
-        from pathlib import Path
-        data_dir = Path("data/raw")
-        all_data = []
-        for year in range(args.start_year, args.end_year + 1):
-            year_file = data_dir / f"{args.location}_{year}.parquet"
-            if year_file.exists():
-                import pandas as pd
-                all_data.append(pd.read_parquet(year_file))
-        if all_data:
-            import pandas as pd
-            df_raw = pd.concat(all_data, axis=0)
-            df_raw.sort_index(inplace=True)
-        else:
-            raise FileNotFoundError("No cached data found. Run without --skip-fetch first.")
+    # Use multiple locations if --multi-location flag is set
+    if args.multi_location:
+        locations_to_use = TRAINING_LOCATIONS
     else:
-        df_raw = fetcher.fetch_years(args.start_year, args.end_year)
+        locations_to_use = [args.location]
+    logger.info(f"Training locations: {locations_to_use}")
     
-    logger.info(f"Raw data shape: {df_raw.shape}")
-    logger.info(f"Date range: {df_raw.index.min()} to {df_raw.index.max()}")
+    all_location_data = {}
+    
+    for loc_name in locations_to_use:
+        logger.info(f"\n--- Fetching {loc_name} ---")
+        fetcher = WeatherDataFetcher(location=loc_name)
+        
+        if args.skip_fetch:
+            # Load cached data
+            data_dir = Path("data/raw")
+            all_data = []
+            for year in range(args.start_year, args.end_year + 1):
+                year_file = data_dir / f"{loc_name}_{year}.parquet"
+                if year_file.exists():
+                    all_data.append(pd.read_parquet(year_file))
+            if all_data:
+                df_raw = pd.concat(all_data, axis=0)
+                df_raw.sort_index(inplace=True)
+                # Add static features
+                df_raw['latitude'] = LOCATIONS[loc_name].latitude
+                df_raw['longitude'] = LOCATIONS[loc_name].longitude
+                df_raw['elevation'] = 0  # Default, API provides this
+            else:
+                logger.warning(f"No cached data for {loc_name}, skipping...")
+                continue
+        else:
+            df_raw = fetcher.fetch_with_static_features(args.start_year, args.end_year)
+        
+        all_location_data[loc_name] = df_raw
+        logger.info(f"{loc_name}: {df_raw.shape}")
     
     # =========================================================================
-    # Step 2: Preprocess Data
+    # Step 2: Preprocess Each Location Separately
     # =========================================================================
     logger.info("="*60)
-    logger.info("STEP 2: Preprocessing Data")
+    logger.info("STEP 2: Preprocessing Multi-Location Data")
     logger.info("="*60)
     
     preprocessor = DataPreprocessor()
-    df_processed = preprocessor.prepare_features(df_raw)
-    df_normalized = preprocessor.normalize(df_processed, fit=True)
     
-    # Create sequences
-    X, y = preprocessor.create_sequences(df_normalized)
+    all_X_train, all_y_train = [], []
+    all_X_val, all_y_val = [], []
+    all_X_test, all_y_test = [], []
     
-    # Split data
-    (X_train, y_train), (X_val, y_val), (X_test, y_test) = \
-        preprocessor.train_val_test_split(X, y)
+    # First pass: collect all training data for scaler fitting
+    all_train_dfs = []
+    
+    for loc_name, df_raw in all_location_data.items():
+        logger.info(f"\n--- Processing {loc_name} ---")
+        
+        df_processed = preprocessor.prepare_features(df_raw)
+        
+        # Split this location's data (70/15/15)
+        n = len(df_processed)
+        train_end = int(n * 0.7)
+        val_end = int(n * 0.85)
+        
+        df_train = df_processed.iloc[:train_end]
+        df_val = df_processed.iloc[train_end:val_end]
+        df_test = df_processed.iloc[val_end:]
+        
+        all_train_dfs.append(df_train)
+        
+        # Store for later
+        all_location_data[loc_name] = {
+            'train': df_train,
+            'val': df_val,
+            'test': df_test,
+        }
+        logger.info(f"{loc_name} split: Train={len(df_train)}, Val={len(df_val)}, Test={len(df_test)}")
+    
+    # Fit scaler on first location's training data only (saves RAM)
+    # All European cities have similar weather ranges, so this is fine
+    first_loc_train = all_train_dfs[0]
+    logger.info(f"\nFitting scaler on first location ({len(first_loc_train)} samples)")
+    _ = preprocessor.normalize(first_loc_train, fit=True)
+    
+    # Second pass: normalize and create sequences for each location
+    for loc_name, splits in all_location_data.items():
+        if not isinstance(splits, dict):
+            continue
+            
+        logger.info(f"\n--- Creating sequences for {loc_name} ---")
+        
+        # Normalize using fitted scaler
+        df_train_norm = preprocessor.normalize(splits['train'], fit=False)
+        df_val_norm = preprocessor.normalize(splits['val'], fit=False)
+        df_test_norm = preprocessor.normalize(splits['test'], fit=False)
+        
+        # Create sequences (noise only for training)
+        X_train, y_train = preprocessor.create_sequences(df_train_norm, stride=3, noise_level=0.02)
+        X_val, y_val = preprocessor.create_sequences(df_val_norm, stride=3, noise_level=0.0)
+        X_test, y_test = preprocessor.create_sequences(df_test_norm, stride=3, noise_level=0.0)
+        
+        all_X_train.append(X_train)
+        all_y_train.append(y_train)
+        all_X_val.append(X_val)
+        all_y_val.append(y_val)
+        all_X_test.append(X_test)
+        all_y_test.append(y_test)
+        
+        logger.info(f"{loc_name}: Train={X_train.shape}, Val={X_val.shape}, Test={X_test.shape}")
+    
+    # Combine all locations
+    X_train = np.concatenate(all_X_train, axis=0)
+    y_train = np.concatenate(all_y_train, axis=0)
+    X_val = np.concatenate(all_X_val, axis=0)
+    y_val = np.concatenate(all_y_val, axis=0)
+    X_test = np.concatenate(all_X_test, axis=0)
+    y_test = np.concatenate(all_y_test, axis=0)
+    
+    # Shuffle training data so batches have mixed cities
+    indices = np.random.permutation(len(X_train))
+    X_train = X_train[indices]
+    y_train = y_train[indices]
     
     # Save preprocessor
     preprocessor.save()
     
+    logger.info(f"\n=== Combined Data ===")
     logger.info(f"Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
     
     # =========================================================================

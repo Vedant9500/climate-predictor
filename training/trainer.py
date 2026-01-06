@@ -75,9 +75,9 @@ class Trainer:
         self.model.to(self.device)
         logger.info(f"Using device: {self.device}")
         
-        # Loss and optimizer
+        # Loss and optimizer (AdamW for proper weight decay)
         self.criterion = nn.MSELoss()
-        self.optimizer = optim.Adam(
+        self.optimizer = optim.AdamW(
             model.parameters(),
             lr=config.learning_rate,
             weight_decay=config.weight_decay,

@@ -87,36 +87,80 @@ class WeatherDataFetcher:
         
         logger.info(f"Fetching {self.location.name} data: {start_date} to {end_date}")
         
-        try:
-            response = requests.get(self.base_url, params=params, timeout=60)
-            response.raise_for_status()
-            data = response.json()
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(self.base_url, params=params, timeout=60)
+                
+                # Handle rate limiting with retry
+                if response.status_code == 429:
+                    wait_time = (2 ** attempt) * 5  # 5, 10, 20, 40, 80 seconds
+                    logger.warning(f"Rate limited. Waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                    time.sleep(wait_time)
+                    continue
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Parse response into DataFrame
+                hourly_data = data.get("hourly", {})
+                if not hourly_data:
+                    logger.warning("No hourly data in response")
+                    return pd.DataFrame()
+                
+                df = pd.DataFrame(hourly_data)
+                df["time"] = pd.to_datetime(df["time"])
+                df.set_index("time", inplace=True)
+                
+                # Add metadata
+                df.attrs["latitude"] = data.get("latitude")
+                df.attrs["longitude"] = data.get("longitude")
+                df.attrs["elevation"] = data.get("elevation")
+                
+                logger.info(f"Fetched {len(df)} hourly records")
+                
+                # Rate limiting - increased delay for multi-location
+                time.sleep(max(self.rate_limit_delay, 1.0))
+                
+                return df
+                
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1 and "429" in str(e):
+                    wait_time = (2 ** attempt) * 5
+                    logger.warning(f"Request error, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"API request failed: {e}")
+                raise
+    
+    def fetch_with_static_features(
+        self,
+        start_year: int,
+        end_year: int,
+        save_intermediate: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Fetch multiple years with static location features as columns.
+        
+        Args:
+            start_year: First year to fetch
+            end_year: Last year to fetch
+            save_intermediate: Save each year to disk
             
-            # Parse response into DataFrame
-            hourly_data = data.get("hourly", {})
-            if not hourly_data:
-                logger.warning("No hourly data in response")
-                return pd.DataFrame()
-            
-            df = pd.DataFrame(hourly_data)
-            df["time"] = pd.to_datetime(df["time"])
-            df.set_index("time", inplace=True)
-            
-            # Add metadata
-            df.attrs["latitude"] = data.get("latitude")
-            df.attrs["longitude"] = data.get("longitude")
-            df.attrs["elevation"] = data.get("elevation")
-            
-            logger.info(f"Fetched {len(df)} hourly records")
-            
-            # Rate limiting
-            time.sleep(self.rate_limit_delay)
-            
-            return df
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
-            raise
+        Returns:
+            DataFrame with lat/lon/elevation columns included
+        """
+        df = self.fetch_years(start_year, end_year, save_intermediate)
+        
+        # Add static features as columns (for multi-location training)
+        df['latitude'] = self.location.latitude
+        df['longitude'] = self.location.longitude
+        # Elevation comes from API response, use default if not available
+        df['elevation'] = df.attrs.get('elevation', 0)
+        
+        logger.info(f"Added static features: lat={self.location.latitude}, lon={self.location.longitude}")
+        
+        return df
     
     def fetch_years(
         self,

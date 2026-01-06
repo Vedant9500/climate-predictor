@@ -16,8 +16,14 @@ class Location:
 LOCATIONS = {
     "berlin": Location("Berlin", 52.52, 13.41),
     "munich": Location("Munich", 48.14, 11.58),
+    "frankfurt": Location("Frankfurt", 50.11, 8.68),
+    "hamburg": Location("Hamburg", 53.55, 9.99),
+    "vienna": Location("Vienna", 48.21, 16.37),
     "pune": Location("Pune", 18.52, 73.86),
 }
+
+# Locations to use for training (multi-location for regularization)
+TRAINING_LOCATIONS = ["berlin", "munich", "frankfurt", "hamburg", "vienna"]
 
 DEFAULT_LOCATION = "berlin"
 
@@ -111,7 +117,7 @@ class TrainingConfig:
     batch_size: int = 64
     epochs: int = 50
     learning_rate: float = 0.001
-    weight_decay: float = 1e-4
+    weight_decay: float = 0.1  # Maximum regularization
     patience: int = 10
     grad_clip: float = 1.0
     train_split: float = 0.7

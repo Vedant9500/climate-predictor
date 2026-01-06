@@ -204,9 +204,9 @@ class WeatherLSTM(nn.Module):
         out = self.dropout(out)
         predictions = self.fc2(out)
         
-        # V1.1: Clamp outputs to valid physical ranges (only during inference)
-        if clamp_output and not self.training:
-            predictions = self._clamp_outputs(predictions)
+        # NOTE: Output clamping removed - it was applying denormalized clamps
+        # to normalized data. Clamping should happen AFTER denormalization
+        # in the prediction pipeline, not inside the model.
         
         if return_attention:
             return predictions, attn_weights

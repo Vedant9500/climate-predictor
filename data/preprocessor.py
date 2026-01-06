@@ -51,7 +51,7 @@ class DataPreprocessor:
         
     def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Clean raw data: handle missing values and outliers.
+        Clean raw data without data leakage.
         
         Args:
             df: Raw DataFrame from API
@@ -61,7 +61,6 @@ class DataPreprocessor:
         """
         logger.info(f"Cleaning data. Initial shape: {df.shape}")
         
-        # Make a copy
         df = df.copy()
         
         # Check for missing values
@@ -73,19 +72,9 @@ class DataPreprocessor:
         # Interpolate missing values (linear for time series)
         df = df.interpolate(method='linear', limit_direction='both')
         
-        # Robust outlier clipping (like old working version)
-        # Prevents extreme values from distorting standardization
-        for col in df.columns:
-            if np.issubdtype(df[col].dtype, np.number):
-                q1 = df[col].quantile(0.01)
-                q3 = df[col].quantile(0.99)
-                iqr = q3 - q1
-                lower_bound = q1 - 3 * iqr
-                upper_bound = q3 + 3 * iqr
-                df[col] = df[col].clip(lower_bound, upper_bound)
-        
-        # Fill any remaining NaNs with column median
-        df = df.fillna(df.median())
+        # FIX: Do NOT calculate quantiles on whole dataset (Leakage!)
+        # Just fill remaining NaNs with column mean
+        df = df.fillna(df.mean())
         
         logger.info(f"Cleaned data shape: {df.shape}")
         
@@ -158,7 +147,7 @@ class DataPreprocessor:
     def add_lag_features(
         self,
         df: pd.DataFrame,
-        lag_hours: List[int] = [1, 3, 6, 12, 24],
+        lag_hours: List[int] = [1, 24],  # Reduced: force LSTM to learn patterns
     ) -> pd.DataFrame:
         """
         Add lag features for key variables.
@@ -188,7 +177,7 @@ class DataPreprocessor:
     def add_rolling_features(
         self,
         df: pd.DataFrame,
-        windows: List[int] = [6, 12, 24],
+        windows: List[int] = [6],  # Reduced: force LSTM to learn patterns
     ) -> pd.DataFrame:
         """
         Add rolling statistics.
@@ -206,12 +195,12 @@ class DataPreprocessor:
             if col in df.columns:
                 for window in windows:
                     df[f'{col}_rolling_mean_{window}h'] = df[col].rolling(window).mean()
-                    df[f'{col}_rolling_std_{window}h'] = df[col].rolling(window).std()
+                    # Removed rolling_std - adds noise, not signal
         
         # Drop rows with NaN from rolling
         df = df.dropna()
         
-        logger.info(f"Added {len(self.target_variables) * len(windows) * 2} rolling features")
+        logger.info(f"Added {len(self.target_variables) * len(windows)} rolling features")
         
         return df
     
@@ -227,8 +216,25 @@ class DataPreprocessor:
         """
         df = self.clean_data(df)
         df = self.add_time_features(df)
-        df = self.add_lag_features(df)
-        df = self.add_rolling_features(df)
+        # REMOVED: Let LSTM learn patterns from raw sequence
+        # df = self.add_lag_features(df)
+        # df = self.add_rolling_features(df)
+        
+        # CRITICAL: Handle static features for multi-location training
+        static_cols = ['latitude', 'longitude', 'elevation']
+        for col in static_cols:
+            if col not in df.columns:
+                logger.warning(f"Static feature {col} missing! Filling with 0.")
+                df[col] = 0.0
+        
+        # Normalize static features to ~[-1, 1] range BEFORE StandardScaler
+        # This prevents them from dominating loss
+        if 'latitude' in df.columns:
+            df['latitude'] = (df['latitude'] - 45.0) / 15.0  # Europe: 30-60
+        if 'longitude' in df.columns:
+            df['longitude'] = (df['longitude'] - 10.0) / 15.0  # Europe: -5 to 25
+        if 'elevation' in df.columns:
+            df['elevation'] = df['elevation'] / 1000.0  # Scale to km
         
         self.feature_columns = df.columns.tolist()
         
@@ -266,6 +272,8 @@ class DataPreprocessor:
         self,
         df: pd.DataFrame,
         df_targets: pd.DataFrame = None,
+        stride: int = 6,
+        noise_level: float = 0.0,  # Add Gaussian noise to prevent memorization
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Create sequences for LSTM training.
@@ -274,6 +282,9 @@ class DataPreprocessor:
             df: Normalized DataFrame for input features
             df_targets: Optional separate DataFrame containing target columns
                        (use this to prevent data leakage)
+            stride: Step size between sequences (default 6 hours)
+            noise_level: Std of Gaussian noise to add (0.0 = no noise)
+                        Use 0.01-0.05 for training, 0.0 for val/test
             
         Returns:
             Tuple of (X, y) where:
@@ -293,9 +304,17 @@ class DataPreprocessor:
         X, y = [], []
         max_horizon = max(self.prediction_horizons)
         
-        for i in range(self.sequence_length, len(data) - max_horizon):
-            # Input sequence (from features df)
-            X.append(data[i - self.sequence_length:i])
+        # Use stride to reduce sequence overlap
+        for i in range(self.sequence_length, len(data) - max_horizon, stride):
+            # Get input sequence
+            seq = data[i - self.sequence_length:i].copy()
+            
+            # Add noise to prevent memorization (training only)
+            if noise_level > 0:
+                noise = np.random.normal(0, noise_level, seq.shape)
+                seq = seq + noise
+            
+            X.append(seq)
             
             # Targets at each horizon (from targets df)
             targets = []
@@ -307,7 +326,7 @@ class DataPreprocessor:
         X = np.array(X, dtype=np.float32)
         y = np.array(y, dtype=np.float32)
         
-        logger.info(f"Created sequences - X: {X.shape}, y: {y.shape}")
+        logger.info(f"Created sequences - X: {X.shape}, y: {y.shape} (stride={stride}, noise={noise_level})")
         
         return X, y
     
