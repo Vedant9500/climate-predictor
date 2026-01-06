@@ -75,7 +75,7 @@ DATA_DIR = "data/raw"
 PROCESSED_DATA_DIR = "data/processed"
 
 # Sequence length for LSTM (hours of history to use)
-# V2.0: Back to 72h - CNN handles longer sequences better
+# Sequence length for LSTM (hours of history to use)
 SEQUENCE_LENGTH = 72  # 3 days of hourly data
 
 # Prediction horizons (hours ahead to predict)
@@ -111,8 +111,8 @@ class TrainingConfig:
     batch_size: int = 64
     epochs: int = 50
     learning_rate: float = 0.001
-    weight_decay: float = 1e-4  # V1.1: Increased from 1e-5
-    patience: int = 10  # Early stopping patience
+    weight_decay: float = 1e-4
+    patience: int = 10
     grad_clip: float = 1.0
     train_split: float = 0.7
     val_split: float = 0.15

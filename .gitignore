@@ -51,4 +51,3 @@ Thumbs.db
 # Secrets
 *.env
 .env.*
-/research

@@ -73,10 +73,49 @@ class DataPreprocessor:
         # Interpolate missing values (linear for time series)
         df = df.interpolate(method='linear', limit_direction='both')
         
+        # Robust outlier clipping (like old working version)
+        # Prevents extreme values from distorting standardization
+        for col in df.columns:
+            if np.issubdtype(df[col].dtype, np.number):
+                q1 = df[col].quantile(0.01)
+                q3 = df[col].quantile(0.99)
+                iqr = q3 - q1
+                lower_bound = q1 - 3 * iqr
+                upper_bound = q3 + 3 * iqr
+                df[col] = df[col].clip(lower_bound, upper_bound)
+        
         # Fill any remaining NaNs with column median
         df = df.fillna(df.median())
         
         logger.info(f"Cleaned data shape: {df.shape}")
+        
+        return df
+    
+    def remove_target_leakage(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Remove raw target variables from input features to prevent data leakage.
+        
+        The model should learn from:
+        - Auxiliary weather features (pressure, radiation, etc.)
+        - Time features (hour, day, month encoding)
+        - Lag features of targets (these are properly shifted)
+        
+        NOT from:
+        - Raw target values at current timestep (this causes leakage!)
+        """
+        df = df.copy()
+        
+        # Remove raw target columns (keep lag versions)
+        cols_to_remove = []
+        for col in self.target_variables:
+            if col in df.columns:
+                cols_to_remove.append(col)
+        
+        if cols_to_remove:
+            # Store target columns separately for later use in y
+            self._target_cols_for_y = cols_to_remove.copy()
+            df = df.drop(columns=cols_to_remove)
+            logger.info(f"Removed {len(cols_to_remove)} raw target columns to prevent leakage: {cols_to_remove}")
         
         return df
     
@@ -119,7 +158,7 @@ class DataPreprocessor:
     def add_lag_features(
         self,
         df: pd.DataFrame,
-        lag_hours: List[int] = [1, 3, 6, 12, 24],  # V2.0: restored
+        lag_hours: List[int] = [1, 3, 6, 12, 24],
     ) -> pd.DataFrame:
         """
         Add lag features for key variables.
@@ -149,7 +188,7 @@ class DataPreprocessor:
     def add_rolling_features(
         self,
         df: pd.DataFrame,
-        windows: List[int] = [6, 12, 24],  # V2.0: restored
+        windows: List[int] = [6, 12, 24],
     ) -> pd.DataFrame:
         """
         Add rolling statistics.
@@ -226,12 +265,15 @@ class DataPreprocessor:
     def create_sequences(
         self,
         df: pd.DataFrame,
+        df_targets: pd.DataFrame = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Create sequences for LSTM training.
         
         Args:
-            df: Normalized DataFrame
+            df: Normalized DataFrame for input features
+            df_targets: Optional separate DataFrame containing target columns
+                       (use this to prevent data leakage)
             
         Returns:
             Tuple of (X, y) where:
@@ -239,20 +281,27 @@ class DataPreprocessor:
                 y: (samples, horizons * targets)
         """
         data = df.values
-        target_indices = [df.columns.get_loc(col) for col in self.target_variables if col in df.columns]
+        
+        # If separate targets df provided, use it; otherwise look in df
+        if df_targets is not None:
+            target_data = df_targets.values
+            target_indices = list(range(len(self.target_variables)))
+        else:
+            target_data = data
+            target_indices = [df.columns.get_loc(col) for col in self.target_variables if col in df.columns]
         
         X, y = [], []
         max_horizon = max(self.prediction_horizons)
         
         for i in range(self.sequence_length, len(data) - max_horizon):
-            # Input sequence
+            # Input sequence (from features df)
             X.append(data[i - self.sequence_length:i])
             
-            # Targets at each horizon
+            # Targets at each horizon (from targets df)
             targets = []
             for h in self.prediction_horizons:
                 for idx in target_indices:
-                    targets.append(data[i + h - 1, idx])
+                    targets.append(target_data[i + h - 1, idx])
             y.append(targets)
         
         X = np.array(X, dtype=np.float32)
@@ -261,6 +310,26 @@ class DataPreprocessor:
         logger.info(f"Created sequences - X: {X.shape}, y: {y.shape}")
         
         return X, y
+    
+    def create_sequences_no_leakage(
+        self,
+        df_full: pd.DataFrame,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Create sequences with built-in leakage prevention.
+        
+        Separates target variables from features before sequence creation.
+        """
+        # Extract target columns
+        target_cols = [col for col in self.target_variables if col in df_full.columns]
+        df_targets = df_full[target_cols].copy()
+        
+        # Remove targets from features
+        df_features = df_full.drop(columns=target_cols)
+        
+        logger.info(f"Split data: {len(df_features.columns)} features, {len(target_cols)} targets")
+        
+        return self.create_sequences(df_features, df_targets)
     
     def train_val_test_split(
         self,
