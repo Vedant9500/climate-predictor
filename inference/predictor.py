@@ -60,6 +60,7 @@ class WeatherPredictor:
         self.preprocessor = self._load_preprocessor()
         
         # Data fetcher
+        self.location_name = location  # Store for static features
         self.fetcher = WeatherDataFetcher(location=location)
         
         logger.info(f"Predictor initialized for {location} on {self.device}")
@@ -114,6 +115,14 @@ class WeatherPredictor:
         # Fetch recent data
         days = (hours_history // 24) + 1
         df_raw = self.fetcher.fetch_recent(days=days)
+        
+        # Add static features (required for multi-location trained models)
+        from config.settings import LOCATIONS
+        loc_name = self.location_name
+        if loc_name in LOCATIONS:
+            df_raw['latitude'] = LOCATIONS[loc_name].latitude
+            df_raw['longitude'] = LOCATIONS[loc_name].longitude
+            df_raw['elevation'] = 0  # Default elevation
         
         # Preprocess
         df_processed = self.preprocessor.prepare_features(df_raw)

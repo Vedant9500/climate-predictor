@@ -32,7 +32,7 @@ class DataPreprocessor:
         self,
         sequence_length: int = SEQUENCE_LENGTH,
         prediction_horizons: List[int] = PREDICTION_HORIZONS,
-        target_variables: List[int] = TARGET_VARIABLES,
+        target_variables: List[str] = TARGET_VARIABLES,
     ):
         """
         Initialize preprocessor.
@@ -47,6 +47,9 @@ class DataPreprocessor:
         self.target_variables = target_variables
         self.scaler = StandardScaler()
         self.target_scaler = StandardScaler()
+        # Store target variable statistics separately for denormalization
+        self.target_means = None
+        self.target_stds = None
         self.feature_columns = None
         
     def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -227,14 +230,17 @@ class DataPreprocessor:
                 logger.warning(f"Static feature {col} missing! Filling with 0.")
                 df[col] = 0.0
         
-        # Normalize static features to ~[-1, 1] range BEFORE StandardScaler
-        # This prevents them from dominating loss
+        # Normalize static features to ~[-1, 1] range using GLOBAL bounds
+        # These bounds work for any location worldwide
         if 'latitude' in df.columns:
-            df['latitude'] = (df['latitude'] - 45.0) / 15.0  # Europe: 30-60
+            # Global latitude: -90 to 90, normalize to [-1, 1]
+            df['latitude'] = df['latitude'] / 90.0
         if 'longitude' in df.columns:
-            df['longitude'] = (df['longitude'] - 10.0) / 15.0  # Europe: -5 to 25
+            # Global longitude: -180 to 180, normalize to [-1, 1]
+            df['longitude'] = df['longitude'] / 180.0
         if 'elevation' in df.columns:
-            df['elevation'] = df['elevation'] / 1000.0  # Scale to km
+            # Elevation: 0 to ~5000m for most cities, normalize to [0, 1]
+            df['elevation'] = df['elevation'] / 5000.0
         
         self.feature_columns = df.columns.tolist()
         
@@ -259,6 +265,16 @@ class DataPreprocessor:
         """
         if fit:
             normalized = self.scaler.fit_transform(df)
+            
+            # Store target variable statistics for denormalization
+            # This works even if targets are later removed from features
+            target_indices = [df.columns.get_loc(col) 
+                             for col in self.target_variables 
+                             if col in df.columns]
+            if target_indices:
+                self.target_means = self.scaler.mean_[target_indices]
+                self.target_stds = self.scaler.scale_[target_indices]
+                logger.info(f"Stored target stats for {len(target_indices)} variables")
         else:
             normalized = self.scaler.transform(df)
         
@@ -317,6 +333,11 @@ class DataPreprocessor:
             X.append(seq)
             
             # Targets at each horizon (from targets df)
+            # Note: i is end of sequence. h=1 means 1 hour AHEAD of sequence end.
+            # So index is i + h - 1 (since i starts at 0 relative to sequence end?)
+            # Wait, i is data index. Sequence ends at i-1.
+            # Next value (h=1) is at index i.
+            # So i + 1 - 1 = i. Correct.
             targets = []
             for h in self.prediction_horizons:
                 for idx in target_indices:
@@ -333,11 +354,21 @@ class DataPreprocessor:
     def create_sequences_no_leakage(
         self,
         df_full: pd.DataFrame,
+        stride: int = 6,
+        noise_level: float = 0.0,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Create sequences with built-in leakage prevention.
         
         Separates target variables from features before sequence creation.
+        
+        Args:
+            df_full: Normalized DataFrame containing all features including targets
+            stride: Step size between sequences (default 6 hours)
+            noise_level: Std of Gaussian noise to add (0.0 = no noise)
+        
+        Returns:
+            Tuple of (X, y) arrays
         """
         # Extract target columns
         target_cols = [col for col in self.target_variables if col in df_full.columns]
@@ -348,7 +379,7 @@ class DataPreprocessor:
         
         logger.info(f"Split data: {len(df_features.columns)} features, {len(target_cols)} targets")
         
-        return self.create_sequences(df_features, df_targets)
+        return self.create_sequences(df_features, df_targets, stride=stride, noise_level=noise_level)
     
     def train_val_test_split(
         self,
@@ -392,6 +423,8 @@ class DataPreprocessor:
                 "sequence_length": self.sequence_length,
                 "prediction_horizons": self.prediction_horizons,
                 "target_variables": self.target_variables,
+                "target_means": self.target_means,
+                "target_stds": self.target_stds,
             }, f)
         
         logger.info(f"Saved preprocessor to {save_dir}")
@@ -410,35 +443,36 @@ class DataPreprocessor:
         preprocessor.scaler = state["scaler"]
         preprocessor.target_scaler = state["target_scaler"]
         preprocessor.feature_columns = state["feature_columns"]
+        # Load stored target stats (with backwards compatibility)
+        preprocessor.target_means = state.get("target_means", None)
+        preprocessor.target_stds = state.get("target_stds", None)
         
         return preprocessor
     
     def denormalize_predictions(
         self,
         predictions: np.ndarray,
-        df_reference: pd.DataFrame,
+        df_reference: pd.DataFrame = None,
     ) -> np.ndarray:
         """
         Denormalize predictions back to original scale.
         
         Args:
             predictions: Normalized predictions
-            df_reference: Reference DataFrame for column info
+            df_reference: (Deprecated) Reference DataFrame, no longer needed
             
         Returns:
             Denormalized predictions
         """
-        # This is a simplified version - for proper denormalization
-        # we need to track the indices of target variables
-        # For now, we'll use inverse_transform on a reconstructed array
+        # Use stored target statistics (set during normalize with fit=True)
+        if self.target_means is None or self.target_stds is None:
+            raise ValueError(
+                "Target statistics not stored. Make sure to call normalize(fit=True) "
+                "on data containing target variables before saving the preprocessor."
+            )
         
-        # Get the mean and std for target variables
-        target_indices = [df_reference.columns.get_loc(col) 
-                         for col in self.target_variables 
-                         if col in df_reference.columns]
-        
-        means = self.scaler.mean_[target_indices]
-        stds = self.scaler.scale_[target_indices]
+        means = self.target_means
+        stds = self.target_stds
         
         # Reshape predictions to denormalize
         n_targets = len(self.target_variables)

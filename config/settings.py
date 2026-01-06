@@ -68,6 +68,8 @@ HOURLY_VARIABLES = [
     "cloud_cover_high",
     
     # Weather Code
+    # TODO: weather_code is categorical (WMO codes 0-99), not continuous.
+    # For better performance, consider one-hot encoding or embedding this feature.
     "weather_code",
 ]
 
@@ -102,11 +104,11 @@ TARGET_VARIABLES = [
 @dataclass
 class ModelConfig:
     input_size: int = len(HOURLY_VARIABLES)
-    hidden_size: int = 128
+    hidden_size: int = 48  # Balanced capacity (was 24/128)
     num_layers: int = 2
-    dropout: float = 0.2
-    bidirectional: bool = True
-    use_attention: bool = True
+    dropout: float = 0.25  # Standard regularization (was 0.4/0.2)
+    bidirectional: bool = False
+    use_attention: bool = True  # Re-enabled for better pattern matching
     output_size: int = len(TARGET_VARIABLES) * len(PREDICTION_HORIZONS)
 
 # =============================================================================
@@ -117,8 +119,8 @@ class TrainingConfig:
     batch_size: int = 64
     epochs: int = 50
     learning_rate: float = 0.001
-    weight_decay: float = 0.1  # Maximum regularization
-    patience: int = 10
+    weight_decay: float = 0.01  # L2 regularization (matched with train.py default)
+    patience: int = 10  # Increased for complex pattern convergence (was 5)
     grad_clip: float = 1.0
     train_split: float = 0.7
     val_split: float = 0.15

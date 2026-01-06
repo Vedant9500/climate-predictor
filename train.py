@@ -48,14 +48,16 @@ def main():
                        help='Train on all TRAINING_LOCATIONS instead of single location')
     
     # Model arguments
-    parser.add_argument('--hidden-size', type=int, default=32,  # Reduced for less overfitting
+    parser.add_argument('--hidden-size', type=int, default=48,  # Balanced capacity
                        help='LSTM hidden size')
-    parser.add_argument('--num-layers', type=int, default=1,  # Reduced from 2
+    parser.add_argument('--num-layers', type=int, default=1,
                        help='Number of LSTM layers')
-    parser.add_argument('--dropout', type=float, default=0.3,  # Balanced
+    parser.add_argument('--dropout', type=float, default=0.25,  # Standard regularization
                        help='Dropout rate')
     parser.add_argument('--no-attention', action='store_true',
-                       help='Disable attention mechanism')
+                       help='Disable attention mechanism (enabled by default)')
+    parser.add_argument('--bidirectional', action='store_true',
+                       help='Enable bidirectional LSTM (disabled by default)')
     
     # Training arguments
     parser.add_argument('--epochs', type=int, default=50,
@@ -64,8 +66,10 @@ def main():
                        help='Training batch size')
     parser.add_argument('--lr', type=float, default=0.001,
                        help='Learning rate')
-    parser.add_argument('--patience', type=int, default=10,
+    parser.add_argument('--patience', type=int, default=10,  # Increased for complex patterns
                        help='Early stopping patience')
+    parser.add_argument('--weight-decay', type=float, default=0.01,
+                       help='Weight decay (L2 regularization)')
     
     # Other
     parser.add_argument('--device', type=str, default=None,
@@ -82,8 +86,7 @@ def main():
     
     from config.settings import TRAINING_LOCATIONS, LOCATIONS
     import pandas as pd
-    from pathlib import Path
-    import numpy as np
+    # Note: Path and np already imported at top of file
     
     # Use multiple locations if --multi-location flag is set
     if args.multi_location:
@@ -129,6 +132,17 @@ def main():
     logger.info("STEP 2: Preprocessing Multi-Location Data")
     logger.info("="*60)
     
+    # Set seeds for reproducibility
+    import random
+    SEED = 42
+    random.seed(SEED)
+    np.random.seed(SEED)
+    import torch
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
+    logger.info(f"Set random seeds to {SEED} for reproducibility")
+    
     preprocessor = DataPreprocessor()
     
     all_X_train, all_y_train = [], []
@@ -162,11 +176,12 @@ def main():
         }
         logger.info(f"{loc_name} split: Train={len(df_train)}, Val={len(df_val)}, Test={len(df_test)}")
     
-    # Fit scaler on first location's training data only (saves RAM)
-    # All European cities have similar weather ranges, so this is fine
-    first_loc_train = all_train_dfs[0]
-    logger.info(f"\nFitting scaler on first location ({len(first_loc_train)} samples)")
-    _ = preprocessor.normalize(first_loc_train, fit=True)
+    # FIX: Fit scaler on ALL locations' training data combined
+    # This ensures proper normalization across all weather ranges
+    combined_train = pd.concat(all_train_dfs, axis=0)
+    logger.info(f"\nFitting scaler on ALL locations ({len(combined_train)} samples)")
+    _ = preprocessor.normalize(combined_train, fit=True)
+    del combined_train  # Free memory
     
     # Second pass: normalize and create sequences for each location
     for loc_name, splits in all_location_data.items():
@@ -180,8 +195,9 @@ def main():
         df_val_norm = preprocessor.normalize(splits['val'], fit=False)
         df_test_norm = preprocessor.normalize(splits['test'], fit=False)
         
-        # Create sequences (noise only for training)
-        X_train, y_train = preprocessor.create_sequences(df_train_norm, stride=3, noise_level=0.02)
+        # Use standard sequence creation (allows autoregression on targets)
+        # We rely on dropout, noise, and weight decay to prevent overfitting
+        X_train, y_train = preprocessor.create_sequences(df_train_norm, stride=3, noise_level=0.01)
         X_val, y_val = preprocessor.create_sequences(df_val_norm, stride=3, noise_level=0.0)
         X_test, y_test = preprocessor.create_sequences(df_test_norm, stride=3, noise_level=0.0)
         
@@ -225,6 +241,7 @@ def main():
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         dropout=args.dropout,
+        bidirectional=args.bidirectional,
         use_attention=not args.no_attention,
     )
     
@@ -243,6 +260,7 @@ def main():
         batch_size=args.batch_size,
         learning_rate=args.lr,
         patience=args.patience,
+        weight_decay=args.weight_decay,
     )
     
     trainer = Trainer(model, config=train_config, device=args.device)

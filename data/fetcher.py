@@ -180,6 +180,8 @@ class WeatherDataFetcher:
             Combined DataFrame with all years
         """
         all_data = []
+        # Store elevation from first successful fetch (attrs lost during concat)
+        elevation = None
         save_dir = Path(DATA_DIR)
         save_dir.mkdir(parents=True, exist_ok=True)
         
@@ -197,11 +199,24 @@ class WeatherDataFetcher:
                     df.to_parquet(year_file)
                     logger.info(f"Saved {year} data to {year_file}")
             
+            # Extract elevation before it gets lost in concat
+            if elevation is None and hasattr(df, 'attrs') and 'elevation' in df.attrs:
+                elevation = df.attrs['elevation']
+                logger.info(f"Extracted elevation: {elevation}m")
+            
             all_data.append(df)
+        
+        # Check for empty data
+        if not all_data:
+            raise ValueError(f"No data fetched for {self.location.name} ({start_year}-{end_year})")
         
         # Combine all years
         combined = pd.concat(all_data, axis=0)
         combined.sort_index(inplace=True)
+        
+        # Preserve elevation in combined DataFrame attrs
+        if elevation is not None:
+            combined.attrs['elevation'] = elevation
         
         logger.info(f"Total records: {len(combined)} ({start_year}-{end_year})")
         

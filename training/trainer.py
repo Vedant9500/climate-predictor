@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class EarlyStopping:
     """Early stopping to prevent overfitting."""
     
-    def __init__(self, patience: int = 10, min_delta: float = 0.0):
+    def __init__(self, patience: int = 5, min_delta: float = 0.001):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -83,17 +83,20 @@ class Trainer:
             weight_decay=config.weight_decay,
         )
         
-        # Learning rate scheduler
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        # Learning rate scheduler (Cosine Annealing)
+        # T_0=10 epochs, T_mult=2 (restarts at 10, 30, 70...)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            mode='min',
-            factor=0.5,
-            patience=5,
-            verbose=True,
+            T_0=10,
+            T_mult=2,
+            eta_min=1e-6,
         )
         
         # Early stopping
-        self.early_stopping = EarlyStopping(patience=config.patience)
+        self.early_stopping = EarlyStopping(
+            patience=config.patience,
+            min_delta=0.001
+        )
         
         # Logging
         self.log_dir = Path(LOGS_DIR)
@@ -234,7 +237,7 @@ class Trainer:
             val_loss = self.validate(val_loader)
             
             # Learning rate scheduling
-            self.scheduler.step(val_loss)
+            self.scheduler.step()
             current_lr = self.optimizer.param_groups[0]['lr']
             
             # Record history

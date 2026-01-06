@@ -53,16 +53,6 @@ class WeatherLSTM(nn.Module):
     V1.1: Added layer normalization and output clamping.
     """
     
-    # Output clamping ranges for each target variable (in order)
-    # temperature, humidity, precipitation, wind, cloud_cover
-    OUTPUT_CLAMPS = {
-        0: (-50.0, 60.0),   # temperature_2m: -50 to 60°C
-        1: (0.0, 100.0),    # relative_humidity_2m: 0-100%
-        2: (0.0, 500.0),    # precipitation: 0-500mm (realistic max)
-        3: (0.0, 200.0),    # wind_speed_10m: 0-200 km/h
-        4: (0.0, 100.0),    # cloud_cover: 0-100%
-    }
-    
     def __init__(self, config: ModelConfig = ModelConfig()):
         """
         Initialize the LSTM model.
@@ -123,58 +113,22 @@ class WeatherLSTM(nn.Module):
         nn.init.zeros_(self.fc1.bias)
         nn.init.xavier_uniform_(self.fc2.weight)
         nn.init.zeros_(self.fc2.bias)
-    
-    def _clamp_outputs(self, predictions: torch.Tensor) -> torch.Tensor:
-        """
-        V1.1: Clamp outputs to valid physical ranges.
-        Only applied during inference (not training) to avoid gradient issues.
-        
-        Args:
-            predictions: (batch, output_size) - flattened predictions
-                         Structure: [h1_t1, h1_t2, ..., h1_t5, h2_t1, ..., h5_t5]
-                         where h=horizon, t=target
-        """
-        n_targets = len(self.OUTPUT_CLAMPS)
-        n_horizons = predictions.size(-1) // n_targets
-        
-        # Clone to avoid in-place modification
-        result = predictions.clone()
-        
-        # Reshape to (batch, horizons, targets)
-        reshaped = result.view(-1, n_horizons, n_targets)
-        
-        # Build list of clamped tensors (out-of-place)
-        clamped_targets = []
-        for target_idx in range(n_targets):
-            if target_idx in self.OUTPUT_CLAMPS:
-                min_val, max_val = self.OUTPUT_CLAMPS[target_idx]
-                clamped_targets.append(torch.clamp(reshaped[:, :, target_idx], min=min_val, max=max_val))
-            else:
-                clamped_targets.append(reshaped[:, :, target_idx])
-        
-        # Stack back together
-        clamped = torch.stack(clamped_targets, dim=-1)
-        
-        # Reshape back
-        return clamped.view(-1, predictions.size(-1))
         
     def forward(
         self,
         x: torch.Tensor,
         return_attention: bool = False,
-        clamp_output: bool = True,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> torch.Tensor:
         """
         Forward pass.
         
         Args:
             x: Input tensor (batch, seq_len, input_size)
-            return_attention: Whether to return attention weights
-            clamp_output: Whether to clamp outputs to valid ranges (V1.1)
+            return_attention: Whether to return attention weights alongside predictions
             
         Returns:
-            Predictions (batch, output_size)
-            Optional attention weights (batch, seq_len)
+            Predictions tensor (batch, output_size)
+            If return_attention=True, returns tuple of (predictions, attention_weights)
         """
         batch_size = x.size(0)
         
@@ -203,10 +157,6 @@ class WeatherLSTM(nn.Module):
         out = torch.relu(self.fc1(out))
         out = self.dropout(out)
         predictions = self.fc2(out)
-        
-        # NOTE: Output clamping removed - it was applying denormalized clamps
-        # to normalized data. Clamping should happen AFTER denormalization
-        # in the prediction pipeline, not inside the model.
         
         if return_attention:
             return predictions, attn_weights

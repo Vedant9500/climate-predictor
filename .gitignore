@@ -42,7 +42,7 @@ logs/
 runs/
 
 # Plots
-plots/
+# plots/
 
 # OS
 .DS_Store

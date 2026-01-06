@@ -63,6 +63,13 @@ def backtest(
         end_date.strftime("%Y-%m-%d"),
     )
     
+    # Add static features (required for multi-location trained models)
+    from config.settings import LOCATIONS
+    if location in LOCATIONS:
+        df['latitude'] = LOCATIONS[location].latitude
+        df['longitude'] = LOCATIONS[location].longitude
+        df['elevation'] = df.attrs.get('elevation', 0)
+    
     logger.info(f"Fetched {len(df)} hours of data")
     
     # Load preprocessor and model
@@ -101,6 +108,16 @@ def backtest(
     model.eval()
     
     x = torch.FloatTensor(sequence).unsqueeze(0)
+    
+    # Check input shape compatibility
+    if x.shape[-1] != config.input_size:
+        raise ValueError(
+            f"Input feature mismatch! Model expects {config.input_size} features, "
+            f"but prepared data has {x.shape[-1]}.\n"
+            "This usually happens when the model was trained with a different strategy "
+            "(e.g. 'no_leakage' mode) than the current code.\n"
+            "Please RETRAIN the model to fix this: python train.py --multi-location"
+        )
     
     with torch.no_grad():
         predictions = model(x).numpy()[0]
