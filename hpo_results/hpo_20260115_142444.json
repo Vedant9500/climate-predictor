@@ -1,0 +1,18 @@
+{
+  "best_trial": 18,
+  "best_val_loss": 0.5657349646968,
+  "best_params": {
+    "hidden_size": 96,
+    "num_layers": 1,
+    "dropout": 0.25,
+    "learning_rate": 0.0027035634980899096,
+    "weight_decay": 0.01484914488914626,
+    "batch_size": 64,
+    "stride": 4,
+    "input_noise": 0.02,
+    "lr_scheduler": "cosine",
+    "use_attention": true
+  },
+  "n_trials": 20,
+  "epochs_per_trial": 15
+}

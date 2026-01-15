@@ -176,10 +176,34 @@ def objective(trial: Trial, args, all_location_data: dict) -> float:
     
     trainer = Trainer(model, config=train_config, lr_scheduler=lr_scheduler)
     
-    # Train
+    # Train with pruning callback
     try:
-        history = trainer.train(X_train, y_train, X_val, y_val)
-        best_val_loss = min(history['val_loss'])
+        train_loader, val_loader = trainer.create_dataloaders(X_train, y_train, X_val, y_val)
+        best_val_loss = float('inf')
+        
+        for epoch in range(args.epochs_per_trial):
+            train_loss = trainer.train_epoch(train_loader)
+            val_loss = trainer.validate(val_loader)
+            
+            # Update best
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+            
+            # Report to Optuna for pruning
+            trial.report(val_loss, epoch)
+            
+            # Check if trial should be pruned (hopeless config)
+            if trial.should_prune():
+                logger.info(f"Trial {trial.number} pruned at epoch {epoch+1}")
+                raise optuna.TrialPruned()
+            
+            # Early stopping within trial
+            if trainer.early_stopping(val_loss):
+                logger.info(f"Trial {trial.number} early stopped at epoch {epoch+1}")
+                break
+                
+    except optuna.TrialPruned:
+        raise  # Re-raise for Optuna to handle
     except Exception as e:
         logger.error(f"Trial failed: {e}")
         return float('inf')
@@ -270,12 +294,29 @@ def main():
     logger.info("TRAIN WITH BEST PARAMS:")
     logger.info("="*60)
     cmd = "python train.py"
+    
+    # Map HPO param names to train.py argument names
+    param_map = {
+        'learning_rate': 'lr',
+        'input_noise': 'input-noise',
+        'hidden_size': 'hidden-size',
+        'num_layers': 'num-layers',
+        'weight_decay': 'weight-decay',
+        'batch_size': 'batch-size',
+        'lr_scheduler': 'lr-scheduler',
+    }
+    
     for key, value in best.params.items():
-        if isinstance(value, bool):
-            if value:
-                cmd += f" --{key.replace('_', '-')}"
-        else:
-            cmd += f" --{key.replace('_', '-')} {value}"
+        # Handle use_attention specially (train.py uses --no-attention flag)
+        if key == 'use_attention':
+            if not value:  # Only add flag if attention is disabled
+                cmd += " --no-attention"
+            continue
+        
+        # Map param name to train.py argument name
+        arg_name = param_map.get(key, key.replace('_', '-'))
+        cmd += f" --{arg_name} {value}"
+    
     cmd += " --multi-location --epochs 50"
     logger.info(cmd)
 
