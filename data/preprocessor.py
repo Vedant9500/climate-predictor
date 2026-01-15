@@ -75,9 +75,9 @@ class DataPreprocessor:
         # Interpolate missing values (linear for time series)
         df = df.interpolate(method='linear', limit_direction='both')
         
-        # FIX: Do NOT calculate quantiles on whole dataset (Leakage!)
-        # Just fill remaining NaNs with column mean
-        df = df.fillna(df.mean())
+        # FIX: Use forward-fill (causal, no future info leakage)
+        # Then backward-fill for any remaining NaNs at the start
+        df = df.ffill().bfill()
         
         logger.info(f"Cleaned data shape: {df.shape}")
         

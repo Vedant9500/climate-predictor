@@ -54,6 +54,7 @@ class Trainer:
         model: WeatherLSTM,
         config: TrainingConfig = TrainingConfig(),
         device: Optional[str] = None,
+        lr_scheduler: str = 'cosine',
     ):
         """
         Initialize trainer.
@@ -83,13 +84,35 @@ class Trainer:
             weight_decay=config.weight_decay,
         )
         
-        # Learning rate scheduler (Cosine Annealing - Smooth Decay)
-        # Decays from initial LR to eta_min over total epochs (no restarts)
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=config.epochs,
-            eta_min=1e-6,
-        )
+        # Learning rate scheduler (based on lr_scheduler parameter)
+        self.lr_scheduler_type = lr_scheduler
+        if lr_scheduler == 'cosine':
+            # Cosine Annealing - Smooth decay over total epochs
+            self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=config.epochs,
+                eta_min=1e-6,
+            )
+        elif lr_scheduler == 'plateau':
+            # ReduceLROnPlateau - Only reduce when learning stalls
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode='min',
+                factor=0.5,
+                patience=3,
+                min_lr=1e-6,
+            )
+        elif lr_scheduler == 'step':
+            # StepLR - Reduce by gamma every step_size epochs
+            self.scheduler = optim.lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=10,
+                gamma=0.5,
+            )
+        else:
+            raise ValueError(f"Unknown lr_scheduler: {lr_scheduler}")
+        
+        logger.info(f"Using LR scheduler: {lr_scheduler}")
         
         # Early stopping
         self.early_stopping = EarlyStopping(
@@ -236,7 +259,10 @@ class Trainer:
             val_loss = self.validate(val_loader)
             
             # Learning rate scheduling
-            self.scheduler.step()
+            if self.lr_scheduler_type == 'plateau':
+                self.scheduler.step(val_loss)  # Plateau needs val_loss
+            else:
+                self.scheduler.step()
             current_lr = self.optimizer.param_groups[0]['lr']
             
             # Record history

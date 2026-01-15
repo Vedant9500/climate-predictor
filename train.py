@@ -72,6 +72,11 @@ def main():
                        help='Weight decay (L2 regularization)')
     parser.add_argument('--input-noise', type=float, default=0.01,
                        help='Input noise level for data augmentation')
+    parser.add_argument('--stride', type=int, default=3,
+                        help='Stride between sequences (lower = more overlap, more data)')
+    parser.add_argument('--lr-scheduler', type=str, default='cosine',
+                        choices=['cosine', 'plateau', 'step'],
+                        help='LR scheduler: cosine (smooth decay), plateau (reduce on stall), step (fixed steps)')
     
     # Other
     parser.add_argument('--device', type=str, default=None,
@@ -159,14 +164,15 @@ def main():
         
         df_processed = preprocessor.prepare_features(df_raw)
         
-        # Split this location's data (70/15/15)
-        n = len(df_processed)
-        train_end = int(n * 0.7)
-        val_end = int(n * 0.85)
+        # FIX Issue 2: Use year-based temporal split to prevent temporal leakage
+        # Train: 2015-2021 (7 years), Val: 2022 (1 year), Test: 2023-2024 (2 years)
+        TRAIN_YEARS = range(2015, 2022)
+        VAL_YEARS = [2022]
+        TEST_YEARS = [2023, 2024]
         
-        df_train = df_processed.iloc[:train_end]
-        df_val = df_processed.iloc[train_end:val_end]
-        df_test = df_processed.iloc[val_end:]
+        df_train = df_processed[df_processed.index.year.isin(TRAIN_YEARS)]
+        df_val = df_processed[df_processed.index.year.isin(VAL_YEARS)]
+        df_test = df_processed[df_processed.index.year.isin(TEST_YEARS)]
         
         all_train_dfs.append(df_train)
         
@@ -197,11 +203,11 @@ def main():
         df_val_norm = preprocessor.normalize(splits['val'], fit=False)
         df_test_norm = preprocessor.normalize(splits['test'], fit=False)
         
-        # Use standard sequence creation (allows autoregression on targets)
-        # We rely on dropout, noise, and weight decay to prevent overfitting
-        X_train, y_train = preprocessor.create_sequences(df_train_norm, stride=3, noise_level=args.input_noise)
-        X_val, y_val = preprocessor.create_sequences(df_val_norm, stride=3, noise_level=0.0)
-        X_test, y_test = preprocessor.create_sequences(df_test_norm, stride=3, noise_level=0.0)
+        # FIX Issue 1: Use create_sequences_no_leakage() to prevent data leakage
+        # This separates target variables from input features before sequence creation
+        X_train, y_train = preprocessor.create_sequences_no_leakage(df_train_norm, stride=args.stride, noise_level=args.input_noise)
+        X_val, y_val = preprocessor.create_sequences_no_leakage(df_val_norm, stride=args.stride, noise_level=0.0)
+        X_test, y_test = preprocessor.create_sequences_no_leakage(df_test_norm, stride=args.stride, noise_level=0.0)
         
         all_X_train.append(X_train)
         all_y_train.append(y_train)
@@ -265,7 +271,7 @@ def main():
         weight_decay=args.weight_decay,
     )
     
-    trainer = Trainer(model, config=train_config, device=args.device)
+    trainer = Trainer(model, config=train_config, device=args.device, lr_scheduler=args.lr_scheduler)
     history = trainer.train(X_train, y_train, X_val, y_val)
     
     # =========================================================================
