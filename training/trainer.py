@@ -55,6 +55,7 @@ class Trainer:
         config: TrainingConfig = TrainingConfig(),
         device: Optional[str] = None,
         lr_scheduler: str = 'cosine',
+        save_dir: Optional[str] = None,
     ):
         """
         Initialize trainer.
@@ -126,7 +127,7 @@ class Trainer:
         self.writer = SummaryWriter(self.log_dir / f"run_{int(time.time())}")
         
         # Checkpointing
-        self.save_dir = Path(SAVED_MODELS_DIR)
+        self.save_dir = Path(save_dir) if save_dir else Path(SAVED_MODELS_DIR)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.best_val_loss = float('inf')
         

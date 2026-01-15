@@ -17,7 +17,10 @@ from config.settings import (
     DATA_END_YEAR,
     DEFAULT_LOCATION,
     PROCESSED_DATA_DIR,
+    TARGET_VARIABLES,
+    HOURLY_VARIABLES,
 )
+from config.specialists import get_specialist, list_specialists
 from data.fetcher import WeatherDataFetcher
 from data.preprocessor import DataPreprocessor
 from models.lstm import WeatherLSTM
@@ -81,8 +84,26 @@ def main():
     # Other
     parser.add_argument('--device', type=str, default=None,
                        help='Device to use (cpu, cuda)')
+    parser.add_argument('--specialist', type=str, default=None,
+                       choices=['precipitation', 'temperature', 'wind', 'cloud', 'humidity'],
+                       help='Train a specialist model (uses domain-specific features)')
     
     args = parser.parse_args()
+    
+    # Handle specialist mode
+    specialist_config = None
+    if args.specialist:
+        specialist_config = get_specialist(args.specialist)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"SPECIALIST MODE: {specialist_config.name}")
+        logger.info(f"{'='*60}")
+        logger.info(f"Description: {specialist_config.description}")
+        logger.info(f"Targets: {specialist_config.targets}")
+        logger.info(f"Features: {len(specialist_config.features)} domain-specific")
+        # Override hyperparameters from specialist config
+        args.dropout = specialist_config.dropout
+        args.weight_decay = specialist_config.weight_decay
+        args.input_noise = specialist_config.input_noise
     
     # =========================================================================
     # Step 1: Fetch Data (Multi-Location)
@@ -150,7 +171,12 @@ def main():
         torch.cuda.manual_seed_all(SEED)
     logger.info(f"Set random seeds to {SEED} for reproducibility")
     
-    preprocessor = DataPreprocessor()
+    # Create preprocessor with appropriate target variables
+    if specialist_config:
+        preprocessor = DataPreprocessor(target_variables=specialist_config.targets)
+        logger.info(f"Specialist targets: {specialist_config.targets}")
+    else:
+        preprocessor = DataPreprocessor()
     
     all_X_train, all_y_train = [], []
     all_X_val, all_y_val = [], []
@@ -203,6 +229,23 @@ def main():
         df_val_norm = preprocessor.normalize(splits['val'], fit=False)
         df_test_norm = preprocessor.normalize(splits['test'], fit=False)
         
+        # Specialist mode: Filter to domain-specific features only
+        if specialist_config:
+            # Get features that exist in both specialist config and data
+            # Include time features (hour_sin, etc.) which are always useful
+            time_features = [c for c in df_train_norm.columns if c.startswith(('hour_', 'day_', 'month_', 'dow_'))]
+            static_features = ['latitude', 'longitude', 'elevation']
+            specialist_features = specialist_config.features + time_features + static_features
+            available_features = [f for f in specialist_features if f in df_train_norm.columns]
+            # Also keep target variables for sequence creation
+            available_features += [t for t in specialist_config.targets if t in df_train_norm.columns]
+            available_features = list(dict.fromkeys(available_features))  # Remove duplicates
+            
+            df_train_norm = df_train_norm[available_features]
+            df_val_norm = df_val_norm[available_features]
+            df_test_norm = df_test_norm[available_features]
+            logger.info(f"Specialist features: {len(available_features)} (from {len(splits['train'].columns)})")
+        
         # FIX Issue 1: Use create_sequences_no_leakage() to prevent data leakage
         # This separates target variables from input features before sequence creation
         X_train, y_train = preprocessor.create_sequences_no_leakage(df_train_norm, stride=args.stride, noise_level=args.input_noise)
@@ -244,6 +287,14 @@ def main():
     logger.info("STEP 3: Creating Model")
     logger.info("="*60)
     
+    # Calculate output size based on targets and horizons
+    from config.settings import PREDICTION_HORIZONS
+    if specialist_config:
+        n_targets = len(specialist_config.targets)
+    else:
+        n_targets = len(TARGET_VARIABLES)
+    output_size = n_targets * len(PREDICTION_HORIZONS)
+    
     model_config = ModelConfig(
         input_size=X_train.shape[-1],
         hidden_size=args.hidden_size,
@@ -251,6 +302,7 @@ def main():
         dropout=args.dropout,
         bidirectional=args.bidirectional,
         use_attention=not args.no_attention,
+        output_size=output_size,
     )
     
     model = WeatherLSTM(model_config)
@@ -271,7 +323,14 @@ def main():
         weight_decay=args.weight_decay,
     )
     
-    trainer = Trainer(model, config=train_config, device=args.device, lr_scheduler=args.lr_scheduler)
+    # Set save directory (specialists go in separate folder)
+    if specialist_config:
+        save_dir = f"saved_models/specialists/{args.specialist}"
+        logger.info(f"Specialist model will be saved to: {save_dir}/")
+    else:
+        save_dir = None  # Use default
+    
+    trainer = Trainer(model, config=train_config, device=args.device, lr_scheduler=args.lr_scheduler, save_dir=save_dir)
     history = trainer.train(X_train, y_train, X_val, y_val)
     
     # =========================================================================
@@ -301,8 +360,12 @@ def main():
     
     test_predictions = np.concatenate(all_predictions, axis=0)
     
-    # Evaluate
-    evaluator = Evaluator()
+    # Evaluate (specialist mode uses different target list)
+    if specialist_config:
+        eval_targets = specialist_config.targets
+    else:
+        eval_targets = TARGET_VARIABLES
+    evaluator = Evaluator(target_variables=eval_targets)
     results = evaluator.print_report(y_test, test_predictions)
     
     # =========================================================================
