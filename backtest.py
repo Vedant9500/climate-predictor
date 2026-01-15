@@ -85,8 +85,12 @@ def backtest(
     if prediction_idx < SEQUENCE_LENGTH:
         raise ValueError("Not enough history before prediction point")
     
-    # Get the sequence for prediction
-    sequence = df_normalized.iloc[prediction_idx - SEQUENCE_LENGTH:prediction_idx].values
+    # Remove target variables from features (match no-leakage training)
+    feature_cols = [col for col in df_normalized.columns if col not in TARGET_VARIABLES]
+    df_features = df_normalized[feature_cols]
+    
+    # Get the sequence for prediction (without target variables)
+    sequence = df_features.iloc[prediction_idx - SEQUENCE_LENGTH:prediction_idx].values
     
     # Load model and predict
     import torch

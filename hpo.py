@@ -140,7 +140,7 @@ def objective(trial: Trial, args, all_location_data: dict) -> float:
     learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-4, 0.1, log=True)
     batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
-    stride = trial.suggest_int('stride', 1, 6)
+    stride = trial.suggest_int('stride', 3, 6)
     input_noise = trial.suggest_float('input_noise', 0.0, 0.05, step=0.01)
     lr_scheduler = trial.suggest_categorical('lr_scheduler', ['cosine', 'plateau', 'step'])
     use_attention = trial.suggest_categorical('use_attention', [True, False])
@@ -180,10 +180,12 @@ def objective(trial: Trial, args, all_location_data: dict) -> float:
     try:
         train_loader, val_loader = trainer.create_dataloaders(X_train, y_train, X_val, y_val)
         best_val_loss = float('inf')
+        logger.info(f"Trial {trial.number}: Starting training ({len(X_train)} samples, {len(train_loader)} batches/epoch)")
         
         for epoch in range(args.epochs_per_trial):
             train_loss = trainer.train_epoch(train_loader)
             val_loss = trainer.validate(val_loader)
+            logger.info(f"  Epoch {epoch+1}/{args.epochs_per_trial} - Train: {train_loss:.4f}, Val: {val_loss:.4f}")
             
             # Update best
             if val_loss < best_val_loss:

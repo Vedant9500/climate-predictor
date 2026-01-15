@@ -103,25 +103,27 @@ def main():
     preprocessor = DataPreprocessor.load()
     df_processed = preprocessor.prepare_features(df)
     df_norm = preprocessor.normalize(df_processed, fit=False)
-    X, y = preprocessor.create_sequences(df_norm, stride=1, noise_level=0.0)
+    
+    # Create sequences WITH targets (33 features - for old models)
+    X_full, y = preprocessor.create_sequences(df_norm, stride=1, noise_level=0.0)
+    
+    # Create sequences WITHOUT targets (28 features - for no-leakage models)
+    feature_cols = [col for col in df_norm.columns if col not in TARGET_VARIABLES]
+    df_features_only = df_norm[feature_cols]
+    X_no_leak, _ = preprocessor.create_sequences(df_features_only, stride=1, noise_level=0.0)
     
     # Convert 'y' (targets) back to denormalized scale for comparison
-    # We need a dummy array to denormalize 'y' because denormalize_predictions expects full shape
-    # But 'y' structure is (samples, horizons * variables)
-    # preprocessor.denormalize_predictions works on 2D array (samples, outputs)
-    
-    # Actually, let's just use the denormalize functionality carefully
-    # The scaler is fitted on 'df_processed'. y contains normalized values.
-    # We can reconstruct a DataFrame for y to denormalize, or misuse denormalize_predictions
     y_denorm = preprocessor.denormalize_predictions(y, df_processed)
     
-    X_tensor = torch.FloatTensor(X)
+    X_full_tensor = torch.FloatTensor(X_full)
+    X_no_leak_tensor = torch.FloatTensor(X_no_leak)
 
     # 3. Load Models
     models = {
         "Current": Path("saved_models/best_model.pt"),
         "Rain-Specialist-1": Path("hall of fame/1(rain).pt"),
         "Rain-Specialist-2": Path("hall of fame/2(rain).pt"),
+        #"Rain-Specialist-3": Path("hall of fame/3(rain).pt"),
     }
     
     print(f"\n🌧️ RAIN CHECK ANALYSIS ({args.location.upper()}, {args.days} days)")
@@ -149,6 +151,12 @@ def main():
             
             model = WeatherLSTM(config)
             model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Select appropriate input based on model's expected features
+            if config.input_size == X_no_leak_tensor.shape[-1]:
+                X_tensor = X_no_leak_tensor  # 28 features (no-leakage model)
+            else:
+                X_tensor = X_full_tensor  # 33 features (old model)
             
             # 1. Run the detailed evaluation
             metrics = evaluate_rain_performance(model, X_tensor, y_denorm, preprocessor, df_processed)
